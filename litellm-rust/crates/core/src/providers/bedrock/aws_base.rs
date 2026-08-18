@@ -12,13 +12,14 @@ use aws_sigv4::http_request::{
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::constants::{
-    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
-    AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN, AWS_STS_ENDPOINT,
-    AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE, BEDROCK_SERVICE,
-    DEFAULT_SESSION_NAME_PREFIX,
+    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME,
+    AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
+    AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE, BEDROCK_SERVICE,
+    DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX,
 };
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
@@ -439,6 +440,118 @@ pub fn sign_bedrock_post(
             (normalized_name.to_string(), value.to_string())
         })
         .collect())
+}
+
+/// Model-id and region parsing shared by every Bedrock route.
+pub fn bedrock_model_id_and_region(model: &str) -> (String, Option<String>) {
+    let mut stripped = model;
+    for prefix in ["bedrock/converse/", "bedrock/", "converse/"] {
+        if let Some(value) = stripped.strip_prefix(prefix) {
+            stripped = value;
+            break;
+        }
+    }
+    let mut region = None;
+    if let Some((candidate, remainder)) = stripped.split_once('/')
+        && is_bedrock_region(candidate)
+    {
+        region = Some(candidate.to_string());
+        stripped = remainder;
+    }
+    for prefix in ["nova-2/", "nova/"] {
+        if let Some(value) = stripped.strip_prefix(prefix) {
+            stripped = value;
+            break;
+        }
+    }
+    if region.is_none() {
+        region = stripped
+            .strip_prefix("arn:")
+            .and_then(|value| value.split(':').nth(3))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+    }
+    (stripped.to_string(), region)
+}
+
+fn is_bedrock_region(value: &str) -> bool {
+    value.len() > 3
+        && value.contains('-')
+        && value
+            .chars()
+            .all(|char| char.is_ascii_alphanumeric() || char == '-')
+}
+
+pub fn resolve_bedrock_region(
+    model_region: Option<&str>,
+    optional_params: &Map<String, Value>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    if let Some(region) = optional_params
+        .get("aws_region_name")
+        .and_then(Value::as_str)
+    {
+        return region.to_string();
+    }
+    if let Some(region) = model_region {
+        return region.to_string();
+    }
+    env_lookup(AWS_REGION_NAME)
+        .or_else(|| env_lookup(AWS_REGION))
+        .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
+}
+
+pub fn aws_auth_config(
+    optional_params: &Map<String, Value>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> AwsAuthConfig {
+    let value = |key: &str| {
+        optional_params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let env = |key: &str| env_lookup(key);
+    AwsAuthConfig {
+        access_key_id: value("aws_access_key_id").or_else(|| env("AWS_ACCESS_KEY_ID")),
+        secret_access_key: value("aws_secret_access_key").or_else(|| env("AWS_SECRET_ACCESS_KEY")),
+        session_token: value("aws_session_token").or_else(|| env("AWS_SESSION_TOKEN")),
+        region_name: value("aws_region_name").or_else(|| env(AWS_REGION_NAME)),
+        session_name: value("aws_session_name").or_else(|| env("AWS_SESSION_NAME")),
+        profile_name: value("aws_profile_name").or_else(|| env("AWS_PROFILE_NAME")),
+        role_name: value("aws_role_name").or_else(|| env("AWS_ROLE_NAME")),
+        web_identity_token: value("aws_web_identity_token")
+            .or_else(|| env("AWS_WEB_IDENTITY_TOKEN")),
+        sts_endpoint: value("aws_sts_endpoint").or_else(|| env("AWS_STS_ENDPOINT")),
+        external_id: value("aws_external_id").or_else(|| env("AWS_EXTERNAL_ID")),
+    }
+}
+
+/// Credentials a host resolved through its own chain and handed down verbatim.
+///
+/// A host with its own resolution (LiteLLM's Python `BaseAWSLLM`, which reads
+/// profiles, STS and boto sessions) passes the result here so the core signs
+/// with exactly those. Without this the core would re-derive from ambient
+/// state, where an unrelated `AWS_ROLE_NAME` or `AWS_PROFILE_NAME` in the
+/// environment outranks explicit keys in [`classify_auth`] and the two sides
+/// would sign as different principals.
+pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option<Credentials> {
+    let value = |key: &str| {
+        optional_params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let access_key_id = value("aws_access_key_id")?;
+    let secret_access_key = value("aws_secret_access_key")?;
+    Some(Credentials::new(
+        access_key_id,
+        secret_access_key,
+        value("aws_session_token").map(str::to_string),
+        None,
+        "litellm-host-supplied",
+    ))
 }
 
 #[cfg(test)]

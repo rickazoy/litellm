@@ -296,5 +296,6 @@ fn core_error_kind(error: &CoreError) -> &'static str {
         CoreError::InvalidResponse(_) => "InvalidResponse",
         CoreError::Network(_) => "NetworkError",
         CoreError::Routing(_) => "RoutingError",
+        CoreError::Unsupported(_) => "UnsupportedRequest",
     }
 }

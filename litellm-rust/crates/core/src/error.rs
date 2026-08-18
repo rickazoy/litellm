@@ -25,6 +25,10 @@ pub enum CoreError {
     Network(String),
     #[error("routing error: {0}")]
     Routing(String),
+    /// The request is outside the surface this route covers in Rust. Hosts that
+    /// keep a reference implementation treat this as "fall back", not "fail".
+    #[error("unsupported by the rust path: {0}")]
+    Unsupported(&'static str),
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
