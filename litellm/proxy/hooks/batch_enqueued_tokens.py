@@ -246,7 +246,7 @@ class BatchEnqueuedTokenStore:
                 already_reserved=scopes[:index],
             )
             if result[0] != 1:
-                await self._refund_via_redis(refund_script, tokens=tokens, scopes=scopes[:index])
+                await self._rollback_partial_reserve(refund_script, tokens=tokens, scopes=scopes[:index])
                 return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=result[1])
         return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes, backend="redis")
 
@@ -384,8 +384,7 @@ class BatchEnqueuedTokenStore:
                 verbose_proxy_logger.warning(
                     "Redis enqueued-token reservation pop failed, falling back to in-memory: %s", str(e)
                 )
-                raw = await self._pop_local_record(batch_id, litellm_parent_otel_span)
-        else:
+        if raw is None:
             raw = await self._pop_local_record(batch_id, litellm_parent_otel_span)
         if raw is None:
             return None
