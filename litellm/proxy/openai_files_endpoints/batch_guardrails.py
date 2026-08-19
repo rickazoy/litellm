@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import tempfile
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -13,8 +14,10 @@ from typing import TYPE_CHECKING, BinaryIO, Final, NoReturn
 from fastapi import HTTPException
 from typing_extensions import assert_never
 
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.openai import BatchGuardrailRecord, BatchGuardrailReport
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 if TYPE_CHECKING:
@@ -23,6 +26,10 @@ if TYPE_CHECKING:
 EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
 _SCAN_WINDOW: Final = 32
+
+# Past this the rewrite rolls to disk, keeping the router's per-deployment deepcopy of the handle
+# as cheap as it is for the spooled upload this replaces.
+_REWRITE_SPOOL_BYTES: Final = 1024 * 1024
 
 _SCAN_METADATA_KEY: Final = "litellm_metadata"
 
@@ -75,19 +82,64 @@ class UnscannableRecord:
     url: str | None
 
 
+BatchScanFailure = UnparseableRecord | UnscannableRecord
+
+
 @dataclass(frozen=True, slots=True)
-class RedactionRequired:
+class RecordRedacted:
+    line_number: int
+    custom_id: str | None
+    record: str
+    """The whole record, re-serialized with the guardrail's rewrite applied."""
+
+
+@dataclass(frozen=True, slots=True)
+class RecordDropped:
     line_number: int
     custom_id: str | None
 
 
-BatchScanFailure = UnparseableRecord | UnscannableRecord | RedactionRequired
+_RecordChange = RecordRedacted | RecordDropped
+
+
+@dataclass(frozen=True, slots=True)
+class BatchScanResult:
+    """What the scan decided, per record. Empty changes means the upload proceeds untouched."""
+
+    changes: tuple[_RecordChange, ...]
+    scanned_records: int
+
+    @property
+    def submitted_records(self) -> int:
+        return self.scanned_records - sum(1 for change in self.changes if isinstance(change, RecordDropped))
+
+    def summary(self) -> str:
+        """Compact per-record outcome for the server-side log line."""
+        return ", ".join(
+            f"line {change.line_number}{_describe(change.custom_id)} "
+            f"{'redacted' if isinstance(change, RecordRedacted) else 'dropped'}"
+            for change in self.changes
+        )
+
+    def report(self) -> BatchGuardrailReport:
+        return BatchGuardrailReport(
+            submitted_records=self.submitted_records,
+            modified_records=tuple(
+                BatchGuardrailRecord(
+                    line=change.line_number,
+                    custom_id=change.custom_id,
+                    action="redacted" if isinstance(change, RecordRedacted) else "dropped",
+                )
+                for change in self.changes
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class _ParsedRecord:
     line_number: int
     payload: Mapping[str, object]
+    raw: str
 
 
 def _rejected(message: str) -> HTTPException:
@@ -108,13 +160,15 @@ def raise_public(failure: BatchScanFailure) -> NoReturn:
                 "and its body has no messages, prompt or input, so guardrails cannot read it. "
                 "Give the record a chat, completion, embedding, responses or messages body"
             )
-        case RedactionRequired(line_number=line_number, custom_id=custom_id):
-            raise _rejected(
-                f"A guardrail changed batch input line {line_number}{_describe(custom_id)}. "
-                "Per-record redaction is not enabled, so the file was rejected rather than modified"
-            )
         case _:
             assert_never(failure)
+
+
+def raise_nothing_to_submit() -> NoReturn:
+    """Every record was blocked, so there is no batch left to create."""
+    raise _rejected(
+        "Every record in the batch input file was blocked by a guardrail, so there is nothing left to submit"
+    )
 
 
 def _describe(custom_id: str | None) -> str:
@@ -137,7 +191,7 @@ def _iter_records(source: BinaryIO) -> Iterator[_ParsedRecord | UnparseableRecor
             yield UnparseableRecord(line_number=line_number)
             return
         yield (
-            _ParsedRecord(line_number=line_number, payload=payload)
+            _ParsedRecord(line_number=line_number, payload=payload, raw=text)
             if isinstance(payload, dict)
             else UnparseableRecord(line_number=line_number)
         )
@@ -206,7 +260,7 @@ async def _scan_record(
     scan_metadata: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
-) -> BatchScanFailure | None:
+) -> BatchScanFailure | _RecordChange | None:
     body: Final = record.payload.get("body")
     if not isinstance(body, dict):
         return UnparseableRecord(line_number=record.line_number)
@@ -222,23 +276,37 @@ async def _scan_record(
         )
 
     scan_input: Final[dict] = copy.deepcopy(body)  # mutable-ok: pre_call_hook mutates the dict it is given
-    scan_input.pop("metadata", None)
+    own_metadata: Final = scan_input.pop("metadata", None)
     scan_input[_SCAN_METADATA_KEY] = dict(scan_metadata)  # mutable-ok: guardrails write bookkeeping here
 
-    returned: Final = await proxy_logging_obj.pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        data=scan_input,
-        call_type=call_type,
-        guardrails_only=True,
-    )
+    try:
+        returned = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=scan_input,
+            call_type=call_type,
+            guardrails_only=True,
+        )
+    except Exception as exc:
+        if CustomGuardrail._is_guardrail_intervention(exc):
+            return RecordDropped(line_number=record.line_number, custom_id=custom_id)
+        raise
+
     # A guardrail may return a replacement dict rather than mutating the one it was given; that
     # replacement is what the request would have become, so it is what gets compared.
     scanned: Final = returned if isinstance(returned, dict) else scan_input
 
     compared: Final = (frozenset(body) | frozenset(scanned)) - _INJECTED_KEYS
-    if _fingerprint(scanned, compared) != _fingerprint(body, compared):
-        return RedactionRequired(line_number=record.line_number, custom_id=custom_id)
-    return None
+    if _fingerprint(scanned, compared) == _fingerprint(body, compared):
+        return None
+    for injected in _INJECTED_KEYS:
+        scanned.pop(injected, None)
+    if own_metadata is not None:
+        scanned["metadata"] = own_metadata
+    return RecordRedacted(
+        line_number=record.line_number,
+        custom_id=custom_id,
+        record=json.dumps({**record.payload, "body": scanned}),  # mutable-ok: json.dumps needs a plain dict
+    )
 
 
 async def _scan_window(
@@ -246,7 +314,7 @@ async def _scan_window(
     scan_metadata: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
-) -> tuple[tuple[int, BatchScanFailure | BaseException], ...]:
+) -> tuple[tuple[int, BatchScanFailure | _RecordChange | BaseException], ...]:
     """``return_exceptions=True`` so one record raising never leaves its siblings unobserved."""
     outcomes: Final = await asyncio.gather(
         *(_scan_record(record, scan_metadata, user_api_key_dict, proxy_logging_obj) for record in window),
@@ -267,20 +335,31 @@ async def scan_batch_input_file(
     request_metadata: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
-) -> BatchScanFailure | None:
+) -> BatchScanFailure | BatchScanResult:
     """
     Stream a batch input file and run the pre-call guardrail chain against every record.
 
-    Returns the record to reject, or None when every record passed. A guardrail that blocks raises
-    its own exception, which is re-raised untouched so its status code survives.
+    A record a guardrail rewrites is kept in its rewritten form and a record it blocks is dropped,
+    which is what the online path does per request. Both are returned for reporting. A guardrail
+    exception that is not a block is re-raised untouched so its status code survives, since dropping
+    a record that was never inspected is worse than refusing the file.
     """
     scan_metadata: Final = build_scan_metadata(request_metadata)
     problems: Final[list[tuple[int, BatchScanFailure | BaseException]]] = []  # mutable-ok: spans windows
+    changes: Final[list[_RecordChange]] = []  # mutable-ok: accumulates across windows
     window: Final[list[_ParsedRecord]] = []  # mutable-ok: bounded read-ahead buffer
+    scanned: Final[list[int]] = []  # mutable-ok: counts records the scan actually reached
 
     async def drain() -> None:
         if window:
-            problems.extend(await _scan_window(tuple(window), scan_metadata, user_api_key_dict, proxy_logging_obj))
+            scanned.append(len(window))
+            for line_number, outcome in await _scan_window(
+                tuple(window), scan_metadata, user_api_key_dict, proxy_logging_obj
+            ):
+                if isinstance(outcome, (RecordRedacted, RecordDropped)):
+                    changes.append(outcome)
+                else:
+                    problems.append((line_number, outcome))
             window.clear()
 
     try:
@@ -299,9 +378,43 @@ async def scan_batch_input_file(
     finally:
         file_source.seek(0)
 
-    if not problems:
-        return None
-    worst: Final = _worst(tuple(problems))
-    if isinstance(worst, BaseException):
-        raise worst
-    return worst
+    if problems:
+        worst: Final = _worst(tuple(problems))
+        if isinstance(worst, BaseException):
+            raise worst
+        return worst
+    return BatchScanResult(
+        changes=tuple(sorted(changes, key=lambda change: change.line_number)),
+        scanned_records=sum(scanned),
+    )
+
+
+def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> BinaryIO:
+    """
+    Re-emit the file with redacted records rewritten and dropped records left out.
+
+    Untouched records are copied through as written rather than re-serialized, so enabling the
+    feature does not reformat records no guardrail objected to. Blank lines between records are
+    not carried over, since they are not records.
+    """
+    redacted: Final = MappingProxyType(
+        {change.line_number: change.record for change in result.changes if isinstance(change, RecordRedacted)}
+    )  # mutable-ok: MappingProxyType freezes the lookup table
+    dropped: Final = frozenset(change.line_number for change in result.changes if isinstance(change, RecordDropped))
+
+    output: Final = tempfile.SpooledTemporaryFile(  # noqa: SIM115  # the caller uploads this handle
+        max_size=_REWRITE_SPOOL_BYTES
+    )
+    wrote_any = False  # rebind-ok: tracks whether a separator is needed
+    try:
+        for item in _iter_records(file_source):
+            if isinstance(item, UnparseableRecord) or item.line_number in dropped:
+                continue
+            replacement = redacted.get(item.line_number)
+            line = item.raw.rstrip("\n") if replacement is None else replacement
+            output.write((("\n" if wrote_any else "") + line).encode("utf-8"))
+            wrote_any = True
+    finally:
+        file_source.seek(0)
+    output.seek(0)
+    return output
