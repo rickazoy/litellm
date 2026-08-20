@@ -1,0 +1,26 @@
+{
+  "seasonal_growth": {
+    "model": "weighted_ensemble",
+    "wape": 0.014961
+  },
+  "spiky": {
+    "model": "robust_linear",
+    "wape": 0.36961
+  },
+  "steady_growth": {
+    "model": "recent_weighted_seasonal_trend",
+    "wape": 0.022308
+  },
+  "step_change": {
+    "model": "ewma",
+    "wape": 0.135472
+  },
+  "weekend_seasonal": {
+    "model": "seasonal_naive",
+    "wape": 0.0
+  },
+  "zero_heavy": {
+    "model": "robust_linear",
+    "wape": 1.0
+  }
+}
