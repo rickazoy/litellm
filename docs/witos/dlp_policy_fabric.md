@@ -30,6 +30,37 @@ upstream can arrive as a blocking rule after a vendor-side edit. Shadow answers
 confidence. A shadow verdict is partitioned out of the aggregation before an
 action is chosen, so there is no code path in which it changes a response.
 
+## Retroactive simulation
+
+Shadow only looks forward, so it costs weeks before anyone can say what a policy
+does. `POST /witos/dlp/retro/simulate` looks backward instead: it replays a
+candidate WIT-DPS document, saved or not, against the decision receipts already
+in the window and reports what would have changed. The headline is
+**newly blocked**, the count of requests the candidate would have refused that
+the recorded policy set did not, because that is the number that decides whether
+a change ships.
+
+This is possible only because a receipt records the matched canonical
+classifiers and the scope of every evaluation while storing none of the content,
+and the same fact bounds it. `data_class` and the scope leaves replay exactly.
+`regex`, `dictionary`, `keyword` and `tool_argument` need the original text and
+come back **indeterminate**, never as "did not match", and indeterminate
+propagates honestly through ALL, ANY and NOT. Every number is reported with its
+indeterminate population beside it, because a policy that reads as harmless
+because its regex clause was skipped is the most dangerous output this feature
+could produce.
+
+Two limits ride along in every response. Requests that matched no policy at the
+time left no receipt, so a match count is a lower bound. And a recorded finding
+set is what the detectors running at the time found, so a class nothing was
+looking for reads as absent rather than as proven absent.
+
+Simulation needs `dlp:test` and `dlp:view_decisions`. It deliberately does not
+need `dlp:enforce`: the whole point is that a lead can evaluate a change they
+are not yet permitted to make. `POST /runs` persists a run so a change ticket
+can cite it, and `POST /compare` replays two candidates over one window so an
+edit can be measured against its predecessor.
+
 ## The streaming honesty rule
 
 `buffer_full` holds the whole answer, evaluates, then releases. It can prevent
@@ -108,7 +139,11 @@ rather than degrading to a weaker engine.
 **Migrations are not applied automatically and must be applied by hand.** The
 Prisma models live in all three copies of `schema.prisma`, and the SQL is
 `litellm-proxy-extras/litellm_proxy_extras/migrations/20260819210000_witos_dlp_policy_fabric/migration.sql`.
-It is additive: five new tables, no existing table altered.
+It is additive: five new tables, no existing table altered. Retroactive
+simulation adds a sixth in
+`litellm-proxy-extras/litellm_proxy_extras/migrations/20260820120000_witos_dlp_retro_run/migration.sql`,
+also additive, holding counts, window bounds, the candidate hash and decision
+ids only.
 
 ## What is not here yet
 
