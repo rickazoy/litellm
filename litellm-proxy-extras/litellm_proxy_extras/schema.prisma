@@ -1739,6 +1739,8 @@ model WITOS_DLPDecision {
   @@index([request_id])
   @@index([organization_id, created_at])
   @@index([shadow, created_at])
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // WIT OS — additive models. Kept as one contiguous block at the end of the file
 // so an upstream merge conflict is a single hunk. Nothing above this line is
