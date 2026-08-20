@@ -791,6 +791,10 @@ Each phase = independently mergeable PR set with tests. Preflight (§0.2) preced
 
 **Env vars:** `WITOS_FINOPS_ENABLED, WITOS_DLP_ENABLED, WITOS_WEBHOOK_SECRET_<NAME>, WITOS_DLP_SECRET_<CONNECTION>, WITOS_DELEGATED_TIMEOUT_MS_DEFAULT=800, WITOS_STREAM_DLP_MODE_DEFAULT=chunk_gate, WITOS_FINOPS_LATENESS_WINDOW_H=2`.
 
+Both feature flags default **off**, and off is inert rather than idle: `witos/registration.py` mounts nothing, schedules nothing, and never imports `finops/` or `policy_fabric/` at all, so a build with the flags unset is indistinguishable from one without this code on the request path. That is deliberately what the first deploy of a new image is tested under, separating "can we run our own image" from "does the new code work". Only an explicit `true` (any casing) enables a subsystem; `1`, `yes` and `on` do not.
+
+Job cadences are the blueprint's, overridable per deployment: `WITOS_FINOPS_AGGREGATION_INTERVAL_MIN=5, WITOS_FINOPS_ANOMALY_INTERVAL_MIN=15, WITOS_FINOPS_QUOTA_MIRROR_HOUR_UTC=1, WITOS_FINOPS_FORECAST_HOUR_UTC=2, WITOS_FINOPS_QUALITY_HOUR_UTC=3`. The nightly three are ordered by what they read: the quota mirror writes the entitlements runway is computed against, and quality scores the forecasts the middle job published. An unparseable or out-of-range value logs a warning and falls back to the default, because a typo in an env var must not stop the gateway from starting.
+
 ---
 
 # PART IV — OPEN DECISIONS (confirm before Phase 4/5)

@@ -521,7 +521,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     parse_team_metadata_schema,
 )
 from litellm.proxy.memory.memory_endpoints import router as memory_router
-from litellm.proxy.witos.policy_fabric.dlp_endpoints import router as witos_dlp_router
+from litellm.proxy.witos.registration import include_witos_routers, schedule_witos_jobs
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableRequestMetricsMiddleware,
     BillingRecorder,
@@ -9171,6 +9171,9 @@ class ProxyStartupEvent:
                     "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
 
+        ### WIT OS BACKGROUND JOBS ###
+        schedule_witos_jobs(scheduler, prisma_client)
+
         # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
         # Do NOT reset job times to "now" as this can trigger the memory leak
         # The misfire_grace_time and coalesce settings will handle any missed runs properly
@@ -17376,7 +17379,7 @@ app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
-app.include_router(witos_dlp_router)
+include_witos_routers(app)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
