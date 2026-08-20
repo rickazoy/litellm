@@ -123,7 +123,60 @@ vi.spyOn(Date.prototype, "toLocaleString").mockImplementation(function (this: Da
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 });
 
+const JSDOM_OBSERVABLE_CSS_PROPERTIES: ReadonlySet<string> = new Set([
+  "display",
+  "visibility",
+  "opacity",
+  "pointer-events",
+  "content",
+]);
+
+const isRcUtilStyle = (node: Node): node is HTMLStyleElement =>
+  node instanceof HTMLStyleElement && node.hasAttribute("data-rc-order");
+
+const pruneUnobservableRules = (style: HTMLStyleElement) => {
+  const sheet = style.sheet;
+  if (sheet === null) return;
+  for (let index = sheet.cssRules.length - 1; index >= 0; index--) {
+    const declaration = (sheet.cssRules[index] as CSSStyleRule).style as CSSStyleDeclaration | undefined;
+    const observable =
+      declaration != null && Array.from(declaration).some((property) => JSDOM_OBSERVABLE_CSS_PROPERTIES.has(property));
+    if (!observable) sheet.deleteRule(index);
+  }
+};
+
 if (typeof window !== "undefined") {
+  const head = document.head;
+  const headAppendChild = head.appendChild.bind(head);
+  head.appendChild = (<T extends Node>(node: T): T => {
+    const inserted = headAppendChild(node);
+    if (isRcUtilStyle(node)) pruneUnobservableRules(node);
+    return inserted;
+  }) as typeof head.appendChild;
+
+  const headInsertBefore = head.insertBefore.bind(head);
+  head.insertBefore = (<T extends Node>(node: T, child: Node | null): T => {
+    const inserted = headInsertBefore(node, child);
+    if (isRcUtilStyle(node)) pruneUnobservableRules(node);
+    return inserted;
+  }) as typeof head.insertBefore;
+
+  const innerHTMLDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+  const writeInnerHTML = innerHTMLDescriptor?.set;
+  const readInnerHTML = innerHTMLDescriptor?.get;
+  if (writeInnerHTML != null && readInnerHTML != null) {
+    Object.defineProperty(HTMLStyleElement.prototype, "innerHTML", {
+      configurable: true,
+      get(this: HTMLStyleElement) {
+        return readInnerHTML.call(this);
+      },
+      set(this: HTMLStyleElement, value: string) {
+        writeInnerHTML.call(this, value);
+        if (isRcUtilStyle(this)) pruneUnobservableRules(this);
+      },
+    });
+  }
+
   // Fixed matchMedia not found error in tests: https://github.com/vitest-dev/vitest/issues/821
   Object.defineProperty(window, "matchMedia", {
     writable: true,

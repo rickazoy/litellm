@@ -202,7 +202,22 @@ const openAntdSelect = async (placeholder: HTMLElement) => {
 };
 
 const openSection = async (name: RegExp) => {
-  await userEvent.click(await screen.findByRole("button", { name }));
+  const trigger = await screen.findByRole("button", { name });
+  const wasExpanded = trigger.getAttribute("aria-expanded") === "true";
+  await userEvent.click(trigger);
+  const panelId = trigger.getAttribute("aria-controls");
+  await waitFor(() => {
+    expect(trigger).toHaveAttribute("aria-expanded", String(!wasExpanded));
+    if (panelId !== null && !wasExpanded) expect(document.getElementById(panelId)).not.toBeNull();
+  });
+};
+
+const ROUTER_SETTINGS_PROPAGATION_MS = 250;
+
+const settleRouterSettings = async () => {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, ROUTER_SETTINGS_PROPAGATION_MS));
+  });
 };
 
 const nameTheKey = async (alias = "contract-key") => {
@@ -282,6 +297,7 @@ describe("CreateKey", () => {
         await openSection(trigger);
       }
       await screen.findByLabelText("Soft Budget");
+      await settleRouterSettings();
       await submit();
 
       expect(await createdPayload()).toStrictEqual(ALL_OPEN_PAYLOAD);
@@ -296,6 +312,9 @@ describe("CreateKey", () => {
         await openSection(SECTIONS[section]);
         if (section === "advanced") {
           await screen.findByLabelText("Soft Budget");
+        }
+        if (section === "router") {
+          await settleRouterSettings();
         }
         await submit();
 

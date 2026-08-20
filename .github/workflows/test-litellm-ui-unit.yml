@@ -68,8 +68,8 @@ jobs:
             fi
             echo "Pull request: running tests related to ${#changed_files[@]} changed UI files"
             npm run test -- related "${changed_files[@]}" --run --passWithNoTests \
-              --pool forks --poolOptions.forks.maxForks=14
+              --poolOptions.threads.maxThreads=14
           else
             echo "Push to $GITHUB_REF_NAME: running the full suite"
-            npm run test -- --run --pool forks --poolOptions.forks.maxForks=14
+            npm run test -- --run --poolOptions.threads.maxThreads=14
           fi
