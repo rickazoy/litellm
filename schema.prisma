@@ -1612,6 +1612,133 @@ model LiteLLM_WorkflowMessage {
   @@index([run_id])
 }
 
+// ============================================================================
+// WIT OS — DLP Policy Federation (blueprint v2 §2.5). Additive block; keep
+// contiguous so an upstream merge is a single hunk.
+// ============================================================================
+
+// A federated DLP vendor connection. `secret_reference` names a key in the
+// secret manager; credentials are never columns here and the API never echoes
+// a resolved secret.
+model WITOS_DLPConnection {
+  connection_id      String    @id @default(uuid())
+  provider           String
+  name               String
+  description        String?
+  base_url           String
+  region             String?
+  tenant_external_id String?
+  auth_type          String
+  secret_reference   String
+  capabilities_json  Json?
+  sync_mode          String    @default("manual_approve")
+  sync_interval_min  Int       @default(60)
+  fail_mode          String    @default("fail_open")
+  timeout_ms         Int       @default(800)
+  privacy_json       Json?
+  enabled            Boolean   @default(true)
+  status             String    @default("active")
+  last_sync_at       DateTime?
+  last_success_at    DateTime?
+  last_error         String?
+  organization_id    String?
+  created_by         String
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  @@index([provider])
+  @@index([organization_id])
+}
+
+model WITOS_DLPPolicy {
+  policy_id               String    @id @default(uuid())
+  name                    String
+  description             String?
+  source                  String
+  connection_id           String?
+  external_policy_id      String?
+  external_policy_version String?
+  mode                    String
+  status                  String    @default("imported")
+  priority                Int       @default(100)
+  direction               String    @default("both")
+  canonical_policy_json   Json
+  external_policy_hash    String?
+  canonical_policy_hash   String
+  compile_status          String?
+  compile_error           String?
+  approved_by             String?
+  activated_at            DateTime?
+  last_synced_at          DateTime?
+  organization_id         String?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+
+  @@unique([connection_id, external_policy_id])
+  @@index([status])
+  @@index([organization_id, status])
+}
+
+// Immutable audit history. Rows are appended, never mutated: an upstream
+// action change from log to block has to stay visible after the fact.
+model WITOS_DLPPolicyVersion {
+  policy_version_id       String   @id @default(uuid())
+  policy_id               String
+  version                 Int
+  source_version          String?
+  canonical_json          Json
+  external_json_sanitized Json?
+  hash                    String
+  change_note             String?
+  created_by              String?
+  created_at              DateTime @default(now())
+
+  @@unique([policy_id, version])
+  @@index([policy_id, created_at])
+}
+
+model WITOS_DLPSyncRun {
+  id            String    @id @default(uuid())
+  connection_id String
+  started_at    DateTime  @default(now())
+  finished_at   DateTime?
+  status        String
+  stats         Json
+  error_detail  Json?
+
+  @@index([connection_id, started_at])
+}
+
+// Decision receipts. `matched_classifiers` carries classifier + count +
+// offsets + confidence only. Raw matched values must never land here.
+model WITOS_DLPDecision {
+  decision_id           String   @id @default(uuid())
+  created_at            DateTime @default(now())
+  request_id            String
+  scope_json            Json
+  policy_id             String
+  policy_version        Int
+  provider              String?
+  external_policy_id    String?
+  direction             String
+  decision              String
+  risk_score            Decimal? @client.Decimal(5, 2)
+  matched_classifiers   Json
+  matched_rule_ids      Json?
+  vendor_request_id     String?
+  evaluation_latency_ms Int?
+  fail_mode_triggered   Boolean  @default(false)
+  redaction_performed   Boolean  @default(false)
+  shadow                Boolean  @default(false)
+  streaming_mode        String?
+  prevented             Boolean  @default(false)
+  organization_id       String?
+  match_hash            String?
+
+  @@index([policy_id, created_at])
+  @@index([request_id])
+  @@index([organization_id, created_at])
+  @@index([shadow, created_at])
 // ─────────────────────────────────────────────────────────────────────────────
 // WIT OS — additive models. Kept as one contiguous block at the end of the file
 // so an upstream merge conflict is a single hunk. Nothing above this line is

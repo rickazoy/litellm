@@ -42,6 +42,13 @@ Documentation = "https://docs.litellm.ai"
 # sub-packages and the opentelemetry trio move in lockstep, and grpcio is
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
+# WIT OS DLP policy fabric. google-re2 is required, not preferred: imported
+# vendor patterns are untrusted input and Python's backtracking `re` would turn
+# a crafted policy into a denial of service. Without this extra the compiler
+# fails every local detector rather than degrading to a weaker engine.
+witos = [
+    "google-re2>=1.1,<2.0",
+]
 proxy = [
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
