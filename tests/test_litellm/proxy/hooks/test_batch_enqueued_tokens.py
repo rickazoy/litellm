@@ -246,7 +246,10 @@ async def test_over_limit_verdict_survives_a_failing_rollback():
 
 
 @pytest.mark.asyncio
-async def test_pop_falls_back_to_local_record_when_redis_pop_finds_nothing():
+async def test_save_reservation_does_not_dual_write_when_redis_save_raises():
+    """LIT-5273 regression: a Redis SET timeout can still land server-side, so writing a local
+    fallback on save failure risks a double refund the first time pop_reservation runs against
+    Redis and a later cancel/retrieve pops the leftover local record."""
     scope = _scope(limit=100)
     record_key: Final = "batch_enqueued_token_reservation:batch_local_record"
     fake = _SingleKeyRedisFake(fail_save_keys=frozenset({record_key}))
@@ -258,11 +261,9 @@ async def test_pop_falls_back_to_local_record_when_redis_pop_finds_nothing():
     assert isinstance(reservation, BatchEnqueuedTokenReservation)
     await store.save_reservation("batch_local_record", reservation)
     assert not fake.records
-
-    popped = await store.pop_reservation("batch_local_record")
-    assert popped == reservation
-    await store.refund(popped)
-    assert not fake.counters
+    assert (
+        store.internal_usage_cache.dual_cache.in_memory_cache.get_cache(key=record_key) is None
+    )
     assert await store.pop_reservation("batch_local_record") is None
 
 

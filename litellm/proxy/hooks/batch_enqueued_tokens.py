@@ -355,12 +355,11 @@ class BatchEnqueuedTokenStore:
                     (self._record_key(batch_id),),
                     (serialized, BATCH_ENQUEUED_TOKEN_TTL_SECONDS),
                 )
-            except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
+            except Exception as e:  # noqa: BLE001  # a Redis SET can land server-side after the client raises; a local fallback would risk a double refund via pop_reservation
                 verbose_proxy_logger.warning(
-                    "Redis enqueued-token reservation save failed, falling back to in-memory: %s", str(e)
+                    "Redis enqueued-token reservation save failed; refund may leak until TTL: %s", str(e)
                 )
-            else:
-                return
+            return
         await self.internal_usage_cache.async_set_cache(
             key=self._record_key(batch_id),
             value=serialized,
