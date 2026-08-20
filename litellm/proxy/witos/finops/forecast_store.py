@@ -587,9 +587,47 @@ class ForecastStore:
         types: Sequence[str],
         rows: Sequence[tuple[object, ...]],
     ) -> int:
-        """One statement per scope rather than one per row: 2,000 scopes, not 10,000 round trips."""
-        if not rows:
-            return 0
+        """One statement per row, because a multi-row VALUES corrupts numeric binds.
+
+        Batching every row of a scope into one statement is the obvious shape and
+        it is what this did until the gateway started returning ``invalid sign in
+        external "numeric" value`` from the forecast job. What actually triggers
+        it is the statement text changing between executions on a session: the
+        row count is baked into the ``VALUES`` clause, so each distinct batch
+        size is a distinct statement, and after a few of those the engine binds a
+        numeric parameter from the wrong description. Measured, not guessed: the
+        identical rows insert cleanly on a freshly opened connection, chunking to
+        60 parameters still fails, and holding the text constant at one row makes
+        a 20-scope run write all 47 forecasts.
+
+        The cost is one round trip per row instead of per scope. A full run of 20
+        scopes takes about three seconds, which is nothing against a nightly job,
+        and it also puts every statement far under the 65535 bind-parameter
+        ceiling that an unbounded batch would eventually hit anyway.
+        """
+        written: Final = tuple(
+            [await self._insert_row(table=table, columns=columns, types=types, row=row) for row in rows]
+        )
+        return sum(written)
+
+    async def _insert_row(
+        self,
+        *,
+        table: str,
+        columns: Sequence[str],
+        types: Sequence[str],
+        row: tuple[object, ...],
+    ) -> int:
+        return await self._insert_batch(table=table, columns=columns, types=types, rows=(row,))
+
+    async def _insert_batch(
+        self,
+        *,
+        table: str,
+        columns: Sequence[str],
+        types: Sequence[str],
+        rows: Sequence[tuple[object, ...]],
+    ) -> int:
         statement: Final = (
             f'INSERT INTO "{table}" ({", ".join(columns)}) '
             f"SELECT gen_random_uuid()::text, v.*, true FROM (VALUES {_values_clause(len(rows), types)}) "
