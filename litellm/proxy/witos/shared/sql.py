@@ -8,6 +8,7 @@ SQL be exercised against a real Postgres in tests without a running proxy.
 """
 
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime, time, timezone
 from typing import Final, Protocol, TypeAlias, runtime_checkable
 
 Row: TypeAlias = Mapping[str, object]
@@ -37,6 +38,28 @@ class _ProxyPrismaClient(Protocol):
     def db(self) -> _RawQueryClient: ...
 
 
+def bind(value: object) -> object:
+    """Make one bind survive Prisma's raw-query encoder.
+
+    ``query_raw`` JSON-encodes every argument through a ``singledispatch``
+    registry that covers ``datetime``, ``Decimal``, ``Json`` and ``Base64`` and
+    nothing else, so a bare ``date`` raises ``TypeError: Type <class
+    'datetime.date'> not serializable`` at request time. Every WIT OS bucket
+    column is a UTC day and every statement casts these binds to
+    ``timestamptz``, so a ``date`` is promoted to UTC midnight rather than
+    stringified. The value is made timezone-aware deliberately: Prisma treats a
+    naive datetime as UTC but Postgres would not, and a bind that means a
+    different instant depending on the server's zone is the same class of bug as
+    the naive-``TIMESTAMP(3)`` lease columns.
+
+    ``datetime`` subclasses ``date``, so the test is exclusive or every
+    timestamp would be truncated to midnight.
+    """
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return datetime.combine(value, time.min, tzinfo=timezone.utc)
+    return value
+
+
 class PrismaSqlExecutor:
     """``SqlExecutor`` backed by a Prisma client."""
 
@@ -49,7 +72,7 @@ class PrismaSqlExecutor:
         return cls(prisma_client.db)
 
     async def query(self, sql: str, *args: object) -> Sequence[Row]:
-        return await self._client.query_raw(sql, *args)
+        return await self._client.query_raw(sql, *(bind(arg) for arg in args))
 
     async def execute(self, sql: str, *args: object) -> int:
-        return await self._client.execute_raw(sql, *args)
+        return await self._client.execute_raw(sql, *(bind(arg) for arg in args))
