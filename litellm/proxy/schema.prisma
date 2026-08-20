@@ -6,6 +6,10 @@ datasource client {
 generator client {
   provider = "prisma-client-py"
   binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
+  // Required by prisma-client-py to generate any model carrying a Decimal field.
+  // WIT OS money columns are Decimal because a float cannot hold a currency
+  // amount exactly (docs/witos/BLUEPRINT_v2.md §1.14).
+  enable_experimental_decimal = true
 }
 
 // Budget / Rate Limits for an org
@@ -1606,4 +1610,208 @@ model LiteLLM_WorkflowMessage {
 
   @@unique([run_id, sequence_number])
   @@index([run_id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WIT OS — additive models. Kept as one contiguous block at the end of the file
+// so an upstream merge conflict is a single hunk. Nothing above this line is
+// modified by WIT OS. See docs/witos/BLUEPRINT_v2.md §1.4.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model WITOS_FinOpsUsageHourly {
+  id                    String   @id @default(uuid())
+  bucket_start_utc      DateTime
+  scope_type            String
+  scope_id              String
+  scope_label           String?
+  organization_id       String?
+  team_id               String?
+  model                 String?
+  model_group           String?
+  provider              String?
+  call_type             String?
+  request_count         Int      @default(0)
+  successful_requests   Int      @default(0)
+  failed_requests       Int      @default(0)
+  prompt_tokens         BigInt   @default(0)
+  completion_tokens     BigInt   @default(0)
+  total_tokens          BigInt   @default(0)
+  cache_read_tokens     BigInt   @default(0)
+  cache_creation_tokens BigInt   @default(0)
+  spend_usd             Decimal  @default(0) @client.Decimal(18, 8)
+  avg_latency_ms        Int?
+  p95_latency_ms        Int?
+  breakdown             Json?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  @@unique([bucket_start_utc, scope_type, scope_id])
+  @@index([scope_type, scope_id, bucket_start_utc])
+  @@index([bucket_start_utc])
+}
+
+model WITOS_FinOpsUsageDaily {
+  id                    String   @id @default(uuid())
+  bucket_date           DateTime
+  scope_type            String
+  scope_id              String
+  scope_label           String?
+  organization_id       String?
+  team_id               String?
+  model_group           String?
+  provider              String?
+  request_count         Int      @default(0)
+  successful_requests   Int      @default(0)
+  failed_requests       Int      @default(0)
+  prompt_tokens         BigInt   @default(0)
+  completion_tokens     BigInt   @default(0)
+  total_tokens          BigInt   @default(0)
+  cache_read_tokens     BigInt   @default(0)
+  cache_creation_tokens BigInt   @default(0)
+  spend_usd             Decimal  @default(0) @client.Decimal(18, 8)
+  breakdown             Json?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  @@unique([bucket_date, scope_type, scope_id])
+  @@index([scope_type, scope_id, bucket_date])
+  @@index([bucket_date])
+}
+
+// Entitlements, NOT rate limits. A LiteLLM TPM/RPM limit throttles a moment; it
+// never means "N tokens remain", so it is deliberately absent here. Every runway
+// number is computed against this table alone.
+model WITOS_FinOpsQuota {
+  quota_id           String    @id @default(uuid())
+  scope_type         String
+  scope_id           String
+  metric             String
+  limit_value        Decimal   @client.Decimal(24, 4)
+  period             String
+  period_start       DateTime
+  period_end         DateTime?
+  reset_at           DateTime?
+  source_type        String
+  source_id          String?
+  soft_threshold_pct Decimal?  @client.Decimal(5, 2)
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  @@unique([source_type, scope_type, scope_id, metric, period])
+  @@index([scope_type, scope_id])
+}
+
+model WITOS_FinOpsForecast {
+  forecast_id           String   @id @default(uuid())
+  scope_type            String
+  scope_id              String
+  generated_at          DateTime @default(now())
+  forecast_start        DateTime
+  forecast_end          DateTime
+  metric                String
+  strategy              String
+  algorithm             String
+  algorithm_version     String
+  history_days          Int
+  training_points       Int
+  trend_regime          String
+  wape                  Decimal? @client.Decimal(8, 4)
+  bias                  Decimal? @client.Decimal(8, 4)
+  quality_score         Int?
+  pricing_snapshot_hash String?
+  forecast_json         Json
+  proj_eom              Decimal? @client.Decimal(18, 4)
+  proj_eoq              Decimal? @client.Decimal(18, 4)
+  burn_rate_daily       Decimal? @client.Decimal(18, 4)
+  is_latest             Boolean  @default(true)
+
+  @@index([scope_type, scope_id, metric, is_latest])
+  @@index([generated_at])
+}
+
+model WITOS_FinOpsRunway {
+  id                        String    @id @default(uuid())
+  computed_at               DateTime  @default(now())
+  quota_id                  String
+  scope_type                String
+  scope_id                  String
+  consumed                  Decimal   @client.Decimal(24, 4)
+  remaining                 Decimal   @client.Decimal(24, 4)
+  exhaustion_p50            DateTime?
+  exhaustion_p90            DateTime?
+  prob_exhaust_before_reset Decimal?  @client.Decimal(5, 4)
+  prob_overrun_this_period  Decimal?  @client.Decimal(5, 4)
+  survives_cycle            Boolean
+  is_latest                 Boolean   @default(true)
+
+  @@index([quota_id, is_latest])
+  @@index([scope_type, scope_id, is_latest])
+}
+
+model WITOS_FinOpsScenario {
+  scenario_id      String   @id @default(uuid())
+  name             String
+  description      String?
+  scope_type       String
+  scope_id         String
+  assumptions_json Json
+  created_by       String
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@index([scope_type, scope_id])
+}
+
+model WITOS_FinOpsAlertRule {
+  alert_id          String    @id @default(uuid())
+  name              String
+  scope_type        String
+  scope_id          String
+  condition_type    String
+  threshold         Decimal   @client.Decimal(12, 4)
+  lookahead_days    Int?
+  channels          Json
+  cooldown_min      Int       @default(240)
+  enabled           Boolean   @default(true)
+  last_triggered_at DateTime?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@index([enabled])
+}
+
+model WITOS_FinOpsAlertEvent {
+  id           String   @id @default(uuid())
+  created_at   DateTime @default(now())
+  alert_id     String?
+  alert_type   String
+  severity     String
+  scope_type   String
+  scope_id     String
+  title        String
+  body         Json
+  status       String   @default("open")
+  acked_by     String?
+  notified_via Json?
+
+  @@index([status, created_at])
+  @@index([alert_id])
+}
+
+// Multi-pod job lease. `lease_until` is the compare-and-set target: a pod only
+// wins the row when the incumbent lease has already expired.
+model WITOS_BackgroundJobLease {
+  job_name     String   @id
+  owner_id     String
+  lease_until  DateTime
+  heartbeat_at DateTime
+}
+
+// Operator-owned FinOps settings, keyed like LiteLLM_Config. Holds
+// `approved_tag_dimensions`, `fx_rate`, and the aggregation watermarks.
+model WITOS_FinOpsConfig {
+  config_key String   @id
+  value_json Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 }
