@@ -145,3 +145,6 @@ crash.*.log
 
 ui/litellm-dashboard/out/
 litellm.log
+
+# WIT OS branded-UI build output (throwaway)
+build/
