@@ -49,6 +49,7 @@ from litellm.proxy.witos.policy_fabric.privacy import PrivacySettings
 from litellm.proxy.witos.policy_fabric.providers.base import resolve_secret
 from litellm.proxy.witos.policy_fabric.rbac import DLPPermission, require_permission, tenant_filter
 from litellm.proxy.witos.policy_fabric.receipts import summarise_findings
+from litellm.proxy.witos.policy_fabric.retro_endpoints import router as retro_router
 from litellm.proxy.witos.policy_fabric.runtime import (
     CompiledPolicyStore,
     EngineConfig,
@@ -71,6 +72,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter(prefix="/witos/dlp", tags=["WIT OS DLP"])  # mutable-ok: dict-shaped JSON body
+router.include_router(retro_router)
 
 _MAX_PAGE_SIZE: Final = 500
 _SUPPORTED_PROVIDERS: Final[tuple[str, ...]] = ("custom_witdps", "custom_rest")

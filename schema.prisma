@@ -1736,3 +1736,36 @@ model WITOS_DLPDecision {
   @@index([organization_id, created_at])
   @@index([shadow, created_at])
 }
+
+// A retroactive simulation run (§2.7 shadow analytics, run backwards). Every
+// column is a count, a window bound, a hash or an id, so a run is citable in a
+// change ticket without any of it becoming a second copy of the finding.
+model WITOS_DLPRetroRun {
+  run_id                 String   @id @default(uuid())
+  created_at             DateTime @default(now())
+  created_by             String?
+  organization_id        String?
+  name                   String?
+  candidate_policy_hash  String
+  candidate_policy_name  String
+  window_start           DateTime
+  window_end             DateTime
+  filters_json           Json
+  status                 String   @default("complete")
+  scanned_decisions      Int
+  evaluated_requests     Int
+  matched_requests       Int
+  indeterminate_requests Int
+  newly_blocked          Int
+  newly_restricted       Int
+  newly_allowed          Int
+  unchanged              Int
+  aggregates_json        Json
+  indeterminate_json     Json
+  sample_decision_ids    Json
+  row_cap                Int
+  truncated              Boolean  @default(false)
+
+  @@index([organization_id, created_at])
+  @@index([candidate_policy_hash])
+}

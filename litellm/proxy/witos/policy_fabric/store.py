@@ -97,6 +97,7 @@ class DLPTables:
     versions: GenericTableActions
     sync_runs: GenericTableActions
     decisions: GenericTableActions
+    retro_runs: GenericTableActions
 
 
 def tables_for(prisma_client: PrismaClient) -> DLPTables:
@@ -107,6 +108,7 @@ def tables_for(prisma_client: PrismaClient) -> DLPTables:
         versions=database.witos_dlppolicyversion,
         sync_runs=database.witos_dlpsyncrun,
         decisions=database.witos_dlpdecision,
+        retro_runs=database.witos_dlpretrorun,
     )
 
 
