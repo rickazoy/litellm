@@ -181,6 +181,22 @@ describe("LoggingSettings", () => {
     expect(source.match(HARDCODED_PALETTE) ?? []).toHaveLength(0);
   });
 
+  it("keeps the remove button destructive on hover instead of the ghost variant's foreground", () => {
+    const initialValue = [
+      {
+        callback_name: "langsmith",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    const remove = screen.getByRole("button", { name: "Remove" });
+    expect(remove).toHaveClass("hover:text-destructive/80");
+    expect(remove).not.toHaveClass("hover:text-foreground");
+  });
+
   it("reports the chosen event type when a different option is picked", async () => {
     const user = userEvent.setup({ delay: null });
     const mockOnChange = vi.fn();
@@ -198,6 +214,29 @@ describe("LoggingSettings", () => {
     await user.click(await screen.findByRole("option", { name: "Failure Only" }));
 
     expect(mockOnChange).toHaveBeenCalledWith([expect.objectContaining({ callback_type: "failure" })]);
+  });
+
+  it("offers the Langfuse OTEL span scope as a pick between full and llm_only rather than free text", async () => {
+    const user = userEvent.setup({ delay: null });
+    const mockOnChange = vi.fn();
+    const initialValue = [
+      {
+        callback_name: "langfuse_otel",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
+
+    expect(screen.queryByPlaceholderText("os.environ/LANGFUSE_SPAN_SCOPE")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "langfuse span scope" }));
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["full", "llm_only"]);
+    await user.click(screen.getByRole("option", { name: "llm_only" }));
+
+    expect(mockOnChange).toHaveBeenCalledWith([
+      expect.objectContaining({ callback_vars: expect.objectContaining({ langfuse_span_scope: "llm_only" }) }),
+    ]);
   });
 
   it("correctly handles numerical input with decimal values", () => {

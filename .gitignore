@@ -3,6 +3,8 @@
 tests/e2e/.fixtures/
 .venv-typecheck
 .venv_policy_test
+.venv-mutmut
+mutants/
 .env
 .claude
 CLAUDE.local.md
@@ -148,3 +150,5 @@ litellm.log
 
 # WIT OS branded-UI build output (throwaway)
 build/
+.coverage-rust
+coverage-rust.xml
