@@ -1,14 +1,9 @@
-import os
-import sys
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -1399,6 +1394,43 @@ class TestContextCachingEndpoints:
         assert returned_cache is None
 
         # Restart the patcher so teardown_method can stop it cleanly
+        self._token_check_patcher.start()
+
+    def test_check_and_create_cache_skips_between_default_and_gemini_2_5_pro_minimum(
+        self, local_model_cost_map
+    ):
+        model = "gemini-2.5-pro"
+        self._token_check_patcher.stop()
+
+        cached_messages = [
+            {
+                "role": "system",
+                "content": " ".join(["word"] * 1500),
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        non_cached_messages = [{"role": "user", "content": "Hello"}]
+
+        messages, _, returned_cache = self.context_caching.check_and_create_cache(
+            messages=cached_messages + non_cached_messages,
+            optional_params=self.sample_optional_params.copy(),
+            api_key="test_key",
+            api_base=None,
+            model=model,
+            client=self.mock_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            cached_content=None,
+            custom_llm_provider="gemini",
+            vertex_project="test_project",
+            vertex_location="us-central1",
+            vertex_auth_header="test_token",
+        )
+
+        assert messages == cached_messages + non_cached_messages
+        assert returned_cache is None
+        self.mock_client.post.assert_not_called()
+
         self._token_check_patcher.start()
 
     @pytest.mark.parametrize(
