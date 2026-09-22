@@ -58,7 +58,16 @@ word = re.compile(r"\bLiteLLM\b")
 danger = re.compile(r'(?<!["\'`\w>/-])WIT OS AI Gateway\s*:')
 # A bare `LiteLLM` used as a declared identifier would become invalid too.
 # There is none today; fail loudly rather than emit broken JS if one appears.
-ident = re.compile(r"\b(?:const|let|var|function|class|interface|type|enum)\s+LiteLLM\b")
+#
+# Anchored to the start of a line (after optional `export`) on purpose. The
+# first version matched the keyword anywhere, and upstream 1.103 shipped a help
+# string containing the English words "let LiteLLM scale it", which tripped it
+# as if it were `let LiteLLM = ...`. Prose inside a string is exactly what the
+# sweep is for; only a declaration is a problem.
+ident = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:const|let|var|function|class|interface|type|enum)\s+LiteLLM\b",
+    re.M,
+)
 
 changed = 0
 for root, _, files in os.walk("src"):
