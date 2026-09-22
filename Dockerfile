@@ -163,6 +163,20 @@ RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \
     python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths"
 
+# ── Provenance ───────────────────────────────────────────────────────────────
+# "What fork commit is under the gateway" had no answer: this image was built
+# by hand from a moving tag and carried no revision. The deployment image
+# refuses to build on a base that lacks this, so an unstamped image cannot
+# reach production by accident.
+ARG WITOS_FORK_SHA=unknown
+ARG WITOS_FORK_BUILT_AT=unknown
+LABEL org.opencontainers.image.title="WIT OS AI Gateway fork" \
+      org.opencontainers.image.source="https://github.com/rickazoy/litellm" \
+      org.opencontainers.image.revision="${WITOS_FORK_SHA}" \
+      org.opencontainers.image.created="${WITOS_FORK_BUILT_AT}"
+ENV WITOS_FORK_REVISION="${WITOS_FORK_SHA}"
+RUN printf "%s\n" "${WITOS_FORK_SHA}" > /app/FORK_REVISION
+
 EXPOSE 4000/tcp
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
